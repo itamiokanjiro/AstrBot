@@ -28,6 +28,7 @@ const theme = useTheme();
 const { t } = useI18n();
 const route = useRoute();
 const LAST_BOT_ROUTE_KEY = 'astrbot:last_bot_route';
+const LAST_CHAT_ROUTE_KEY = 'astrbot:last_chat_route';
 let dialog = ref(false);
 let accountWarning = ref(false)
 let updateStatusDialog = ref(false);
@@ -396,9 +397,20 @@ commonStore.getStartTime();
 
 // 视图模式切换
 const viewMode = computed({
-  get: () => customizer.viewMode,
+  get: () => {
+    return route.path.startsWith('/chat') ? 'chat' : 'bot';
+  },
   set: (value: 'bot' | 'chat') => {
-    customizer.SET_VIEW_MODE(value);
+    if (value === 'chat') {
+      const lastSessionId = localStorage.getItem(LAST_CHAT_ROUTE_KEY);
+      router.push(lastSessionId ? `/chat/${lastSessionId}` : '/chat');
+    } else {
+      let lastBotRoute = localStorage.getItem(LAST_BOT_ROUTE_KEY) || '/';
+      if (lastBotRoute.startsWith('/chat')) {
+        lastBotRoute = '/';
+      }
+      router.push(lastBotRoute);
+    }
   }
 });
 
@@ -406,26 +418,65 @@ const viewMode = computed({
 // 保存 bot 模式的最後路由
 // 監聽 route 變化，保存最後一次 bot 路由
 watch(() => route.fullPath, (newPath) => {
-  if (customizer.viewMode === 'bot' && typeof window !== 'undefined') {
-    try {
+  if (typeof window === 'undefined') return;
+
+  try {
+    const isChatRoute = newPath.startsWith('/chat');
+
+    // ✅ bot：只存「非 chat 頁」
+    if (!isChatRoute) {
       localStorage.setItem(LAST_BOT_ROUTE_KEY, newPath);
-    } catch (e) {
-      console.error('Failed to save last bot route to localStorage:', e);
     }
+
+    // ✅ chat：只存 sessionId
+    //  不是我不用route.params.id  而是用了一定炸裂過不了編譯
+    if (isChatRoute) {
+      const parts = newPath.split('/');
+      const sessionId = parts[2];
+
+      if (sessionId) {
+        localStorage.setItem(LAST_CHAT_ROUTE_KEY, sessionId);
+      }
+    }
+
+  } catch (e) {
+    console.error('Failed to save route:', e);
   }
 });
 
-// 監聽 viewMode 切換
+// 監聽 viewMode 切換 先這樣  算是目前最佳解法 有問題再修正
 watch(() => customizer.viewMode, (newMode, oldMode) => {
-  if (newMode === 'bot' && oldMode === 'chat' && typeof window !== 'undefined') {
-    // 從 chat 切換回 bot，跳轉到最後一次的 bot 路由
-    let lastBotRoute = '/';
-    try {
-      lastBotRoute = localStorage.getItem(LAST_BOT_ROUTE_KEY) || '/';
-    } catch (e) {
-      console.error('Failed to read last bot route from localStorage:', e);
+  if (typeof window === 'undefined') return;
+
+  try {
+    // 👉 chat → bot
+    if (newMode === 'bot' && oldMode === 'chat') {
+      let lastBotRoute = localStorage.getItem(LAST_BOT_ROUTE_KEY) || '/';
+
+      // ✅ 防止被污染（如果誤存成 /chat/...）
+      if (lastBotRoute.startsWith('/chat')) {
+        lastBotRoute = '/';
+      }
+
+      router.push(lastBotRoute);
+      return;
     }
-    router.push(lastBotRoute);
+
+    // 👉 bot → chat
+    if (newMode === 'chat' && oldMode === 'bot') {
+      const lastSessionId = localStorage.getItem(LAST_CHAT_ROUTE_KEY);
+
+      if (lastSessionId) {
+        router.push(`/chat/${lastSessionId}`);
+      } else {
+        router.push('/chat');
+      }
+
+      return;
+    }
+
+  } catch (e) {
+    console.error('Failed to restore route:', e);
   }
 });
 
